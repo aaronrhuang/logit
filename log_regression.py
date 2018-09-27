@@ -41,8 +41,8 @@ def get_dicts(cursor):
 
 # Create the training data/labels with respect to some field to predict
 def get_variables(y_var, statDict, repoDict):
-    X, Y = [],[]
-    for repo, fields in statDict.items():
+    X, Y, Xv, Yv = [],[],[],[]
+    for repo, fields in statDict.items()[:-100]:
         if repo in repoDict:
             row = []
             for i in GIT_STAT_FIELDS:
@@ -52,7 +52,18 @@ def get_variables(y_var, statDict, repoDict):
                     row += [0]
             X.append(row)
             Y.append(repoDict[repo][y_var]) if y_var in repoDict[repo] else Y.append(0)
-    return (np.array(X),np.array(Y))
+    for repo, fields in statDict.items()[-100:]:
+        if repo in repoDict:
+            row = []
+            for i in GIT_STAT_FIELDS:
+                if i in fields:
+                    row += [fields[i]]
+                else:
+                    row += [0]
+            Xv.append(row)
+            Yv.append(repoDict[repo][y_var]) if y_var in repoDict[repo] else Yv.append(0)
+    print(np.array(X).shape,np.array(Y).shape, np.array(Xv).shape, np.array(Yv).shape)
+    return (np.array(X),np.array(Y), np.array(Xv), np.array(Yv))
 
 if __name__ == "__main__":
     try:
@@ -60,9 +71,9 @@ if __name__ == "__main__":
 
             statDict,repoDict = get_dicts(cursor)
 
-            X,Y = get_variables('stargazers_count', statDict, repoDict)
+            X,Y,Xv,Yv = get_variables('stargazers_count', statDict, repoDict)
 
-            reg = linear_model.LogisticRegression(penalty='l2', C=100, intercept_scaling=1)
+            reg = linear_model.LogisticRegression(penalty='l2', C=5, intercept_scaling=1)
             reg.fit(X, np.ravel(Y))
             w,w_0 = reg.coef_, reg.intercept_
 
@@ -71,7 +82,16 @@ if __name__ == "__main__":
             plt.xlabel('Repository')
             plt.ylabel('Stargazers Count')
             plt.legend()
-            plt.savefig("figs/logr_stargazers.png")
+            plt.savefig("figs/logr_stargazers_train.png")
+            plt.show()
+
+            plt.plot([i for i in range(len(Yv))],Yv, alpha=0.7, label = "Actual")
+            plt.plot([i for i in range(len(Yv))],reg.predict(Xv), alpha = 0.7, label = "Predicted")
+            plt.xlabel('Repository')
+            plt.ylabel('Stargazers Count')
+            plt.legend()
+            plt.savefig("figs/logr_stargazers_val.png")
+            plt.show() 
 
     finally:
         connection.close()
