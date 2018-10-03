@@ -23,27 +23,33 @@ GIT_REPO_FIELDS = ['forks_count', 'stargazers_count', 'subscribers_count']
 # parse database rows/json into dictionaries,
 # TODO: add caching
 def get_dicts(cursor):
-    cursor.execute("SELECT `*` FROM `GetCommitStats` LIMIT 1000")
-    resultStat = cursor.fetchmany(1000)
+    sql = "SELECT repoUrl, repository, a.json as ajson, b.json as bjson, a.id\
+    FROM (SELECT * FROM GetRepository LIMIT 5000) a INNER JOIN (SELECT * FROM GetCommitStats LIMIT 5000) b\
+    ON b.repoUrl LIKE CONCAT('%', a.repository)\
+    WHERE b.json IS NOT NULL AND a.json IS NOT NULL\
+    LIMIT 10000"
+
+    cursor.execute(sql)
+    fetched = cursor.fetchmany(10000)
+    print len(fetched)
     statDict = {}
-    for r in resultStat:
-        d = json.loads(r['json'])[10]
-        statDict[r['repoUrl'].split('/')[-1]] = {key:d[key] for key in GIT_STAT_FIELDS if key in d}
+    for r in fetched:
+        da = json.loads(r['ajson'])
+        db = json.loads(r['bjson'])[10] if r and r['bjson'] else {}
+        astats = {key:da[key] for key in GIT_REPO_FIELDS if key in da}
+        bstats = {key:db[key] for key in GIT_STAT_FIELDS if key in db}
+        astats.update(bstats)
+        statDict[r['repoUrl']] = astats
 
-    cursor.execute("SELECT `*` FROM `GetRepository` LIMIT 1000")
-    resultRepo = cursor.fetchmany(1000)
-    repoDict = {}
-    for r in resultRepo:
-        d = json.loads(r['json'])
-        repoDict[r['repository']] = {key:d[key] for key in GIT_REPO_FIELDS if key in d}
+    print len(statDict)
 
-    return (statDict,repoDict)
+    return statDict
 
 # Create the training data/labels with respect to some field to predict
-def get_variables(y_var, statDict, repoDict):
+def get_variables(y_var, statDict):
     X, Y, Xv, Yv = [],[],[],[]
     for repo, fields in statDict.items()[:-100]:
-        if repo in repoDict:
+        if y_var in fields:
             row = []
             for i in GIT_STAT_FIELDS:
                 if i in fields:
@@ -51,9 +57,9 @@ def get_variables(y_var, statDict, repoDict):
                 else:
                     row += [0]
             X.append(row)
-            Y.append(repoDict[repo][y_var]) if y_var in repoDict[repo] else Y.append(0)
+            Y.append(min(100,fields[y_var]))
     for repo, fields in statDict.items()[-100:]:
-        if repo in repoDict:
+        if y_var in fields:
             row = []
             for i in GIT_STAT_FIELDS:
                 if i in fields:
@@ -61,19 +67,18 @@ def get_variables(y_var, statDict, repoDict):
                 else:
                     row += [0]
             Xv.append(row)
-            Yv.append(repoDict[repo][y_var]) if y_var in repoDict[repo] else Yv.append(0)
-    print(np.array(X).shape,np.array(Y).shape, np.array(Xv).shape, np.array(Yv).shape)
+            Yv.append(min(100,fields[y_var])) if y_var in fields else Yv.append(0)
     return (np.array(X),np.array(Y), np.array(Xv), np.array(Yv))
 
 if __name__ == "__main__":
     try:
         with connection.cursor() as cursor:
 
-            statDict,repoDict = get_dicts(cursor)
+            statDict = get_dicts(cursor)
 
-            X,Y,Xv,Yv = get_variables('stargazers_count', statDict, repoDict)
-
-            reg = linear_model.LogisticRegression(penalty='l2', C=5, intercept_scaling=1)
+            X,Y,Xv,Yv = get_variables('stargazers_count', statDict)
+            print X.shape,Y.shape, Xv.shape, Yv.shape
+            reg = linear_model.LogisticRegression(penalty='l2', C=10, intercept_scaling=1)
             reg.fit(X, np.ravel(Y))
             w,w_0 = reg.coef_, reg.intercept_
 
